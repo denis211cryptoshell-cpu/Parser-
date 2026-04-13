@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(powershell *)",
+      "Bash(pip install *)",
+      "Bash(del *)",
+      "Bash(git init)"
+    ]
+  },
+  "$version": 3
+}
