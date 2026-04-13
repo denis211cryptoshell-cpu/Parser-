@@ -5,7 +5,14 @@
       "Bash(powershell *)",
       "Bash(pip install *)",
       "Bash(del *)",
-      "Bash(git init)"
+      "Bash(git init)",
+      "Bash(git commit *)",
+      "Bash(git checkout *)",
+      "Bash(git push *)",
+      "Bash(git branch *)",
+      "Bash(git rm *)",
+      "Bash(echo *)",
+      "Bash(git add *)"
     ]
   },
   "$version": 3

@@ -2,10 +2,13 @@
 
 Production-ready Telegram бот для парсинга чатов по ключевым словам с встроенной админ-панелью.
 
+**Userbot на Pyrogram** — реальный парсинг сообщений из групп и каналов через MTProto протокол.
+
 ## 🚀 Стек технологий
 
 - **Python 3.11+**
 - **Aiogram 3** - Telegram Bot Framework (Long Polling)
+- **Pyrogram 2.0** - Userbot (MTProto) для чтения сообщений
 - **SQLAlchemy 2.0 + Alembic** - ORM + миграции (SQLite → PostgreSQL ready)
 - **Redis** - FSM storage + L2 Cache
 - **Pydantic v2** - валидация конфигурации
@@ -34,20 +37,23 @@ crypto-algos-bot/
 │   ├── handlers/
 │   │   ├── __init__.py
 │   │   ├── start.py            # /start handler
-│   │   └── admin.py            # Админ панель
+│   │   ├── admin.py            # Админ панель
+│   │   └── userbot_handler.py  # Авторизация userbot
 │   ├── keyboards/
 │   │   ├── __init__.py
 │   │   └── inline.py           # Inline клавиатуры
 │   ├── middlewares/
 │   │   ├── __init__.py
-│   │   └── logging.py          # Логирование запросов
+│   │   ├── logging.py          # Логирование запросов
+│   │   └── database.py         # Сессия БД
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── parser.py           # Логика парсинга чатов
+│   │   ├── userbot.py          # Pyrogram userbot сервис
+│   │   ├── parser.py           # Логика парсинга
 │   │   ├── admin_service.py    # Бизнес-логика админки
-│   │   └── notification.py     # Уведомления
-│   └── utils/
-│       └── __init__.py
+│   │   ├── notification.py     # Уведомления
+│   │   ├── chat_monitor.py     # Фоновый мониторинг (fallback)
+│   ├── └── __init__.py
 ├── migrations/
 │   ├── env.py
 │   ├── script.py.mako
@@ -91,7 +97,15 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Настроить .env
+### 4. Получить API ID/Hash для Userbot
+
+1. Зайдите на **[my.telegram.org](https://my.telegram.org)**
+2. Войдите с номером телефона
+3. Перейдите в **API development tools**
+4. Создайте приложение (App title, description — любые)
+5. Скопируйте **App api_id** и **App api_hash**
+
+### 5. Настроить .env
 
 ```bash
 cp .env.example .env
@@ -109,9 +123,6 @@ REDIS_URL=redis://localhost:6379/0
 # Database URL (SQLite по умолчанию)
 DATABASE_URL=sqlite+aiosqlite:///./data/bot.db
 
-# Для PostgreSQL:
-# DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/bot_db
-
 # Админ панель (ID администратора, можно несколько через запятую)
 ADMIN_IDS=123456789
 
@@ -123,19 +134,32 @@ LOG_FILE=logs/bot.log
 PARSING_LIMIT=100
 CACHE_TTL_L1=300
 CACHE_TTL_L2=600
+MONITORING_INTERVAL=10
+
+# Pyrogram Userbot (получить на https://my.telegram.org/apps)
+API_ID=12345678
+API_HASH=your_api_hash_here
+USERBOT_SESSION=userbot.session
 ```
 
-### 5. Применить миграции
+### 6. Применить миграции
 
 ```bash
 alembic upgrade head
 ```
 
-### 6. Запустить бота
+### 7. Запустить бота
 
 ```bash
 python -m app.main
 ```
+
+При первом запуске Userbot попросит:
+1. **Номер телефона** — введите `+7XXXXXXXXXX`
+2. **Код подтверждения** — придёт в Telegram
+3. **2FA пароль** — если включена двухфакторная аутентификация
+
+После авторизации session сохранится в `userbot.session`.
 
 ## 🐳 Docker
 
@@ -163,16 +187,41 @@ docker-compose down
 
 ## 🎯 Функционал
 
-### Парсинг чатов
-- Мониторинг указанных чатов по ключевым словам
-- Двухуровневое кеширование (L1 - память, L2 - Redis)
-- Фильтрация дубликатов
-- Автоматическое сохранение в БД
+### Userbot парсинг (Pyrogram)
+- **Реальное чтение сообщений** из групп и каналов
+- Поддержка **MTProto** протокола
+- Автоматическая проверка **ключевых слов**
+- Кеширование обработанных сообщений
+- Отправка уведомлений админам
+
+### Двухуровневое кеширование
+
+```
+┌─────────────────┐
+│   Запрос кеша   │
+└────────┬────────┘
+         │
+    ┌────▼────┐
+    │  L1     │ ← In-memory (dict, LRU)
+    │  Cache  │ ← TTL: 5 минут
+    └────┬────┘
+         │ Miss
+    ┌────▼────┐
+    │  L2     │ ← Redis (JSON сериализация)
+    │  Cache  │ ← TTL: 10 минут
+    └─────────┘
+```
+
+**Преимущества:**
+- ⚡ Мгновенный доступ к L1
+- 🔄 Распределённый L2 для рестартов
+- 📉 Меньше нагрузки на БД
+- 🧹 Автоматическая очистка по TTL
 
 ### Админ-панель (полностью inline, edit_message_text)
 
 **💬 Чаты:**
-- Добавить чат в мониторинг
+- Добавить чат (ID, @username, ссылка)
 - Удалить чат
 - Просмотр списка
 
@@ -189,15 +238,17 @@ docker-compose down
 
 **⚙️ Настройки:**
 - Статистика
+- Статус Userbot
 - Очистка кеша
+- Управление мониторингом
 
 ### Уведомления
-При нахождении совпадения админ получает уведомление:
-- Название группы
-- ID отправителя
-- Текст сообщения
-- Ключевые слова
-- Ссылка на чат с сообщением
+При нахождении совпадения админ получает:
+- 📝 Название группы
+- 👤 ID отправителя
+- 🔑 Ключевые слова
+- 💬 Текст сообщения
+- 🔗 Ссылка на чат
 
 ## 🔑 Команды
 
@@ -208,29 +259,26 @@ docker-compose down
 
 ## 🏗 Архитектура
 
-### Кеширование (L1 + L2)
+### Чистая архитектура
 
 ```
-┌─────────────────┐
-│   Запрос кеша   │
-└────────┬────────┘
-         │
-    ┌────▼────┐
-    │  L1     │ ← In-memory (dict, LRU)
-    │  Cache  │ ← TTL: 5 минут
-    └────┬────┘
-         │ Miss
-    ┌────▼────┐
-    │  L2     │ ← Redis
-    │  Cache  │ ← TTL: 10 минут
-    └─────────┘
+Handlers → Services → Database
+   ↓          ↓          ↓
+Keyboards  Cache      Models
+   ↓          ↓          ↓
+Middleware FSM        Engine
 ```
 
-**Преимущества:**
-- ⚡ Мгновенный доступ к L1
-- 🔄 Распределённый L2 для рестартов
-- 📉 Меньше запросов к Telegram API
-- 💾 Меньше нагрузки на БД
+### Поток данных
+
+```
+1. Userbot читает сообщения (Pyrogram)
+2. Проверяет monitored_chats
+3. Проверяет ключевые слова
+4. Сохраняет в БД (SQLAlchemy)
+5. Кеширует (L1 + L2)
+6. Отправляет уведомление админу (Aiogram)
+```
 
 ### Переход на PostgreSQL
 
@@ -264,9 +312,11 @@ Alembic автоматически создаст все таблицы.
 
 **Пример логов:**
 ```
-2026-04-13 10:30:45 | INFO     | handlers.start:cmd_start:15 | Пользователь запустил бота | User: Иван | ID: 123456789
-2026-04-13 10:30:46 | DEBUG    | core.cache:get:45 | L1 Cache hit | Key: chat:123456
-2026-04-13 10:30:47 | INFO     | services.parser:check_message:35 | Найдено совпадение | Chat: Crypto Chat | Keywords: bitcoin, btc
+2026-04-13 21:38:23 | INFO | Userbot запущен | User: Mulenrush (@mulenrudsh)
+2026-04-13 21:38:23 | INFO | Загружено 2 чатов для мониторинга
+2026-04-13 21:39:05 | DEBUG | Прочитано сообщение | Chat: Бизнес | Msg ID: 12345
+2026-04-13 21:39:05 | INFO | Найдено совпадение | Keywords: крипта, биткоин
+2026-04-13 21:39:06 | INFO | Сообщение сохранено | ID: 1
 ```
 
 ## 🔄 Alembic миграции
@@ -294,7 +344,9 @@ alembic current
 ## 🛡 Безопасность
 
 - ✅ Токен бота в `.env` (не в коде)
+- ✅ API ID/Hash через переменные окружения
 - ✅ Admin IDs через переменную окружения
+- ✅ `userbot.session` в `.gitignore`
 - ✅ Middleware для логирования всех запросов
 - ✅ Валидация входных данных через Pydantic
 - ✅ Кеширование для снижения нагрузки на API
@@ -366,26 +418,39 @@ alembic current
 docker run -d -p 6379:6379 --name redis redis:7-alpine
 ```
 
+### Userbot не авторизуется
+- Проверьте API ID/Hash на my.telegram.org
+- Убедитесь что номер телефона верный
+- Удалите `userbot.session` и авторизуйтесь заново
+
 ### Ошибка миграций
 ```bash
 alembic stamp head  # Отметить как применённую
 alembic upgrade head  # Применить
 ```
 
+### TgCrypto missing
+Pyrogram работает и без TgCrypto, но медленнее. Для ускорения на Linux:
+```bash
+pip install tgcrypto
+```
+На Windows требует MSVC Build Tools.
+
 ## 📝 TODO
 
-- [ ] Фоновый парсинг чатов по расписанию
+- [ ] Парсинг истории чатов (retrospective)
 - [ ] Экспорт данных в CSV/JSON
 - [ ] Фильтры по датам
 - [ ] Статистика и графики
 - [ ] Мультиязычность
 - [ ] Webhook режим
+- [ ] Тесты (pytest)
 
 ## 👨‍💻 Автор
 
 Разработано с ❤️ для портфолио
 
-**Стек:** Aiogram 3 + SQLAlchemy + Redis + Pydantic + Loguru
+**Стек:** Aiogram 3 + Pyrogram + SQLAlchemy + Redis + Pydantic + Loguru
 
 ## 📄 Лицензия
 
